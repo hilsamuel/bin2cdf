@@ -10,9 +10,8 @@ import time
 from scipy.ndimage import uniform_filter1d
 from datetime import datetime
 
-# Constants for GPS time conversion
-GPS_LEAP_SECONDS = 18  # Current difference between GPS and Unix time
-GPS_TO_UNIX_OFFSET = 315964800  # Seconds between GPS epoch (1980-01-06) and Unix epoch (1970-01-01)
+GPS_LEAP_SECONDS = 18
+GPS_TO_UNIX_OFFSET = 315964800
 
 
 def select_file():
@@ -29,16 +28,15 @@ def process_dataflash_log(bin_file):
     print(f"Processing {os.path.basename(bin_file)}...")
     mlog = mavutil.mavlink_connection(bin_file)
 
-    # Initialize data containers
     GPS_data = []
     IMU_data = []
     BARO_data = []
     TEMP_data = []
     HUM_data = []
     first_timestamp = None
-    timezone_offset = 0  # Will be set based on first GPS message
+    timezone_offset = 0  
 
-    # First pass - set timezone offset from first GPS message
+    
     mlog.rewind()
     while True:
         msg = mlog.recv_match()
@@ -46,19 +44,16 @@ def process_dataflash_log(bin_file):
             break
 
         if msg.get_type() == 'GPS' and hasattr(msg, 'GWk') and hasattr(msg, 'GMS'):
-            # Calculate timezone offset from first GPS message
             gps_week_seconds = msg.GWk * 604800
             gps_ms_seconds = msg.GMS / 1000.0
             gps_epoch = gps_week_seconds + gps_ms_seconds
             unix_timestamp = gps_epoch + GPS_TO_UNIX_OFFSET - GPS_LEAP_SECONDS
 
-            # Get local time from system to determine timezone offset
             local_time = datetime.fromtimestamp(unix_timestamp)
             utc_time = datetime.utcfromtimestamp(unix_timestamp)
             timezone_offset = (local_time - utc_time).total_seconds()
             break
 
-    # Second pass - collect all data with absolute timestamps
     mlog.rewind()
     while True:
         try:
@@ -67,7 +62,6 @@ def process_dataflash_log(bin_file):
                 break
 
             if msg.get_type() == 'GPS' and hasattr(msg, 'GWk') and hasattr(msg, 'GMS'):
-                # Calculate absolute timestamp for GPS messages
                 gps_week_seconds = msg.GWk * 604800
                 gps_ms_seconds = msg.GMS / 1000.0
                 gps_epoch = gps_week_seconds + gps_ms_seconds
@@ -76,18 +70,17 @@ def process_dataflash_log(bin_file):
                 if hasattr(msg, 'Lat') and hasattr(msg, 'Lng') and hasattr(msg, 'Alt'):
                     GPS_data.append([
                         unix_timestamp,
-                        msg.Lat,  # degrees
+                        msg.Lat,  
                         msg.Lng,
-                        msg.Alt  # meters
+                        msg.Alt  
                     ])
 
                     if first_timestamp is None or unix_timestamp < first_timestamp:
                         first_timestamp = unix_timestamp
 
             elif hasattr(msg, 'TimeUS'):
-                # For non-GPS messages, use TimeUS relative to first timestamp
                 if first_timestamp is not None:
-                    abs_time = first_timestamp + (msg.TimeUS / 1e6)  # Convert to seconds and add to first timestamp
+                    abs_time = first_timestamp + (msg.TimeUS / 1e6)
 
                     if msg.get_type() == 'IMU' and hasattr(msg, 'Temp'):
                         IMU_data.append([abs_time, msg.Temp])
@@ -115,7 +108,6 @@ def process_dataflash_log(bin_file):
             print(f"Warning: Skipping message - {str(e)}")
             continue
 
-    # Convert to numpy arrays
     GPS_data = np.array(GPS_data) if len(GPS_data) > 0 else np.empty((0, 4))
     IMU_data = np.array(IMU_data) if len(IMU_data) > 0 else np.empty((0, 2))
     BARO_data = np.array(BARO_data) if len(BARO_data) > 0 else np.empty((0, 3))
@@ -126,17 +118,15 @@ def process_dataflash_log(bin_file):
         print("Error: No valid GPS data found")
         return None
 
-    # Create time reference from GPS data (absolute Unix timestamps)
     time_points = np.unique(np.floor(GPS_data[:, 0]))
     output_len = len(time_points)
 
-    # Initialize output with observation numbers
     output_data = {
-        'obs': np.arange(1, output_len + 1),  # 1-based index
+        'obs': np.arange(1, output_len + 1),  
         'lat': np.full(output_len, np.nan),
         'lon': np.full(output_len, np.nan),
         'altitude': np.full(output_len, np.nan),
-        'time': time_points,  # Absolute Unix timestamps
+        'time': time_points, 
         'air_temp': np.full(output_len, np.nan),
         'dew_point': np.full(output_len, np.nan),
         'rel_hum': np.full(output_len, np.nan),
@@ -147,15 +137,12 @@ def process_dataflash_log(bin_file):
         'wind_dir': np.full(output_len, np.nan)
     }
 
-    # Use only raw latitude and longitude from GPS_0 (columns 9 and 10)
     for i, t in enumerate(time_points):
-        # GPS_data[:, 0] is time; columns 1 and 2 should match lat/lon from columns 9 and 10 in original GPS_0
         mask = np.floor(GPS_data[:, 0]) == t
         if np.any(mask):
-            # Take the first GPS_0 message at this second
             gps_row = GPS_data[mask][0]
-            lat = gps_row[1]  # column 9 from original GPS_0
-            lon = gps_row[2]  # column 10 from original GPS_0
+            lat = gps_row[1]  
+            lon = gps_row[2]  
             alt = gps_row[3]
 
             if -90 <= lat <= 90 and -180 <= lon <= 180:
@@ -163,24 +150,21 @@ def process_dataflash_log(bin_file):
                 output_data['lon'][i] = lon
                 output_data['altitude'][i] = alt
 
-    # Process barometric pressure
     if len(BARO_data) > 0:
         for i, t in enumerate(time_points):
             mask = np.floor(BARO_data[:, 0]) == t
             if np.any(mask):
                 output_data['air_press'][i] = np.nanmean(BARO_data[mask, 1])
 
-    # Process humidity data
     if len(HUM_data) > 0:
         for i, t in enumerate(time_points):
             mask = np.floor(HUM_data[:, 0]) == t
             if np.any(mask):
                 output_data['rel_hum'][i] = np.nanmean(HUM_data[mask, 1])
 
-    # Process temperature data (priority: TEMP > IMU > BARO > HUM)
     temp_sources = []
     if len(TEMP_data) > 0:
-        temp_sources.append(TEMP_data[:, [0, 1]])  # Temp1
+        temp_sources.append(TEMP_data[:, [0, 1]])  
     if len(IMU_data) > 0:
         temp_sources.append(IMU_data)
     if len(BARO_data) > 0:
@@ -195,7 +179,6 @@ def process_dataflash_log(bin_file):
             if np.any(mask):
                 output_data['air_temp'][i] = np.nanmean(all_temp_data[mask, 1])
 
-        # Apply moving average
         if output_len > 9:
             output_data['air_temp'] = uniform_filter1d(output_data['air_temp'], size=9, mode='nearest')
 
@@ -207,37 +190,32 @@ def save_outputs(data, base_name):
         print("No valid data to save")
         return False
 
-    # Save as text file
     txt_output = f"{base_name}.txt"
     with open(txt_output, 'w') as f:
-        # Write header
         f.write("obs,lat,lon,altitude,time,air_temp,dew_point,rel_hum,air_press,gpt,gpt_height,wind_speed,wind_dir\n")
 
-        # Write data with proper formatting
         for _, row in data.iterrows():
             line = [
                 str(int(row['obs'])),
                 f"{row['lat']:.7f}" if not np.isnan(row['lat']) else 'NaN',
                 f"{row['lon']:.7f}" if not np.isnan(row['lon']) else 'NaN',
                 f"{row['altitude']:.2f}" if not np.isnan(row['altitude']) else 'NaN',
-                f"{row['time']:.2f}" if not np.isnan(row['time']) else 'NaN',  # Unix timestamp
+                f"{row['time']:.2f}" if not np.isnan(row['time']) else 'NaN',
                 f"{row['air_temp']:.6f}" if not np.isnan(row['air_temp']) else 'NaN',
                 f"{row['dew_point']:.6f}" if not np.isnan(row['dew_point']) else 'NaN',
                 f"{row['rel_hum']:.6f}" if not np.isnan(row['rel_hum']) else 'NaN',
                 f"{row['air_press']:.6f}" if not np.isnan(row['air_press']) else 'NaN',
-                'NaN', 'NaN', 'NaN', 'NaN'  # Placeholders
+                'NaN', 'NaN', 'NaN', 'NaN'
             ]
             f.write(','.join(line) + '\n')
 
     print(f"Created text file: {txt_output}")
 
-    # Save as NetCDF file
     nc_output = f"{base_name}.nc"
     try:
-        # Convert Unix timestamps to datetime64 for NetCDF
+    
         time_values = pd.to_datetime(data['time'], unit='s').values
 
-        # Create dataset without attributes first
         ds = xr.Dataset(
             {
                 'latitude': ('time', data['lat'].values),
@@ -254,7 +232,6 @@ def save_outputs(data, base_name):
             }
         )
 
-        # Now add attributes carefully
         variable_attrs = {
             'time': {
                 'long_name': 'Time',
@@ -299,12 +276,10 @@ def save_outputs(data, base_name):
             }
         }
 
-        # Apply attributes
         for var_name, attrs in variable_attrs.items():
             if var_name in ds.variables:
                 ds[var_name].attrs.update(attrs)
 
-        # Set encoding for time variable to prevent conflicts
         encoding = {
             'time': {
                 'dtype': 'double',
